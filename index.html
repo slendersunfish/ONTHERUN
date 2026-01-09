@@ -1,0 +1,483 @@
+ <!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ON THE RUN – Standby Moves Prototype</title>
+  <style>
+    :root{--bg:#0b0f14;--card:#121824;--muted:#94a3b8;--text:#e5e7eb;--good:#22c55e;--warn:#f59e0b;--bad:#ef4444;--line:#233044;--btn:#1f2937}
+    *{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    body{margin:0;background:linear-gradient(180deg,#070a10,#0b0f14 30%,#070a10);color:var(--text)}
+    header{padding:18px 18px 10px;display:flex;gap:14px;align-items:center;justify-content:space-between}
+    h1{margin:0;font-size:20px;letter-spacing:.3px}
+    .sub{color:var(--muted);font-size:13px;margin-top:4px}
+    .wrap{max-width:1200px;margin:0 auto;padding:12px 18px 24px}
+    .card{background:rgba(18,24,36,.92);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+    label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px}
+    input,select{background:#0b1220;border:1px solid var(--line);color:var(--text);padding:10px 10px;border-radius:10px}
+    input[type="number"]{width:92px}
+    .btn{background:var(--btn);border:1px solid var(--line);color:var(--text);padding:10px 12px;border-radius:10px;cursor:pointer}
+    .btn:hover{filter:brightness(1.1)}
+    .btn.primary{background:#0b3b2a;border-color:#14532d}
+    .btn.danger{background:#3b0b13;border-color:#7f1d1d}
+    .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:#0b1220;color:var(--muted);font-size:12px}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th,td{border-bottom:1px solid var(--line);padding:10px 8px;font-size:13px;text-align:left;vertical-align:top}
+    th{color:var(--muted);font-weight:600}
+    .status{font-weight:800}
+    .good{color:var(--good)}
+    .warn{color:var(--warn)}
+    .bad{color:var(--bad)}
+    .tiny{font-size:12px;color:var(--muted);line-height:1.35}
+    .moves{display:grid;gap:10px;margin-top:10px}
+    .move{border:1px solid var(--line);background:#0b1220;border-radius:12px;padding:10px}
+    .move .top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+    .move .tag{font-size:12px;border:1px solid var(--line);padding:4px 8px;border-radius:999px;color:var(--muted)}
+    .hr{height:1px;background:var(--line);margin:10px 0}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>ON THE RUN <span class="sub">— Standby Moves Prototype</span></h1>
+      <div class="sub">All stations on one page • Pre-filled to “perfect crewing” • Edit exceptions then calculate moves</div>
+    </div>
+    <div class="pill">Shift: <span id="shiftLabel" style="color:#cbd5e1">Day (07:00–19:00)</span></div>
+  </header>
+
+  <div class="wrap">
+    <section class="card">
+      <div class="tiny">
+        Enter <b>Total</b>, <b>L1</b> and <b>HD</b>. People can have multiple skills, so <b>L1 + HD may be greater than Total</b> (overlap).
+        Hard rules for a pump being <b>On the Run</b>: <b>Total ≥ 4</b>, <b>L1 ≥ 1</b>, <b>HD ≥ 1</b>.
+        <span class="tiny">(Officer cannot be driver-in-charge at the same time; we treat that as an operational rule and flag potential edge cases later.)</span>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div>
+          <label>Shift</label>
+          <select id="shift">
+            <option value="day" selected>Day (07:00–19:00)</option>
+            <option value="night">Night (19:00–07:00)</option>
+          </select>
+        </div>
+        <div class="pill">Priorities: <span style="color:#cbd5e1">Nearest first • Protect Control/TL</span></div>
+        <button class="btn" id="reset">Reset to perfect crewing</button>
+        <button class="btn danger" id="clear">Clear saved data</button>
+        <button class="btn primary" id="calc" type="button">Calculate moves</button>
+      </div>
+
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>Station</th>
+            <th>Eligibility</th>
+            <th>Capability</th>
+            <th>Total</th>
+            <th>L1</th>
+            <th>HD</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <div class="hr"></div>
+      <div id="summary" class="tiny"></div>
+      <div id="moves" class="moves"></div>
+
+      <div class="hr"></div>
+      <div class="tiny">
+        <b>Nearest-station logic:</b> this prototype uses a simple <i>nearest list</i> per station (hierarchical geography). Later we can replace that with real travel times using your Google My Maps lat/long.
+      </div>
+    </section>
+  </div>
+
+<script>
+(() => {
+  const $ = (id)=>document.getElementById(id);
+
+  const MIN_TOTAL = 4, MIN_L1 = 1, MIN_HD = 1;
+  const STORAGE_KEY = 'otr_allstations_v2';
+
+  // In-scope sample list
+  const SURREY = [
+    {name:'Camberley', eligibility:'24x7', cap:'none'},
+    {name:'Chertsey', eligibility:'24x7', cap:'none'},
+    {name:'Dorking', eligibility:'24x7', cap:'none'},
+    {name:'Epsom', eligibility:'24x7', cap:'none'},
+    {name:'Esher', eligibility:'24x7', cap:'none'},
+    {name:'Farnham', eligibility:'24x7', cap:'none'},
+    {name:'Fordbridge', eligibility:'24x7', cap:'none'},
+    {name:'Godstone', eligibility:'24x7', cap:'none'},
+    {name:'Guildford', eligibility:'24x7', cap:'tl'},
+    {name:'Leatherhead', eligibility:'24x7', cap:'tl'},
+    {name:'Reigate', eligibility:'24x7', cap:'control'},
+    {name:'Salfords', eligibility:'24x7', cap:'none'},
+    {name:'Woking', eligibility:'24x7', cap:'none'},
+    {name:'Painshill', eligibility:'dayOnly', cap:'control'},
+    {name:'Haslemere', eligibility:'dayOnly', cap:'none'},
+    {name:'Walton', eligibility:'dayOnly', cap:'none'}
+  ];
+
+  // Hierarchical geography (nearest first). This is a placeholder list you can refine.
+  // The algorithm will pick donors from the nearest list first when possible.
+  const NEAREST = {
+    reigate:    ['salfords','godstone','epsom','leatherhead','woking','guildford','fordbridge','chertsey','esher','painshill','farnham','dorking','camberley','walton','haslemere'],
+    godstone:   ['reigate','salfords','epsom','dorking','leatherhead','guildford','woking','farnham','camberley','fordbridge','chertsey','esher','painshill','walton','haslemere'],
+    salfords:   ['reigate','epsom','godstone','dorking','leatherhead','guildford','woking','fordbridge','chertsey','esher','painshill','farnham','camberley','walton','haslemere'],
+    epsom:      ['leatherhead','salfords','reigate','esher','godstone','woking','guildford','fordbridge','chertsey','painshill','dorking','camberley','farnham','walton','haslemere'],
+    leatherhead:['epsom','painshill','guildford','woking','salfords','reigate','esher','godstone','chertsey','fordbridge','dorking','camberley','farnham','walton','haslemere'],
+    guildford:  ['woking','leatherhead','painshill','dorking','farnham','camberley','chertsey','esher','fordbridge','epsom','salfords','reigate','godstone','walton','haslemere'],
+    woking:     ['guildford','painshill','chertsey','camberley','esher','fordbridge','leatherhead','farnham','dorking','epsom','salfords','reigate','godstone','walton','haslemere'],
+    painshill:  ['esher','woking','leatherhead','chertsey','fordbridge','epsom','guildford','camberley','farnham','dorking','salfords','reigate','godstone','walton','haslemere'],
+    esher:      ['painshill','fordbridge','chertsey','epsom','woking','leatherhead','guildford','salfords','reigate','godstone','camberley','dorking','farnham','walton','haslemere'],
+    chertsey:   ['fordbridge','woking','esher','painshill','camberley','guildford','leatherhead','epsom','farnham','dorking','salfords','reigate','godstone','walton','haslemere'],
+    fordbridge: ['chertsey','esher','painshill','woking','epsom','camberley','guildford','leatherhead','farnham','dorking','salfords','reigate','godstone','walton','haslemere'],
+    camberley:  ['woking','chertsey','guildford','farnham','fordbridge','painshill','esher','dorking','leatherhead','epsom','salfords','reigate','godstone','walton','haslemere'],
+    farnham:    ['guildford','dorking','camberley','woking','leatherhead','chertsey','painshill','esher','fordbridge','epsom','salfords','reigate','godstone','walton','haslemere'],
+    dorking:    ['leatherhead','guildford','farnham','epsom','salfords','reigate','godstone','woking','painshill','esher','camberley','chertsey','fordbridge','walton','haslemere'],
+    walton:     ['esher','painshill','fordbridge','chertsey','woking','epsom','leatherhead','guildford','camberley','farnham','dorking','salfords','reigate','godstone','haslemere'],
+    haslemere:  ['farnham','guildford','dorking','camberley','woking','leatherhead','painshill','chertsey','esher','fordbridge','epsom','salfords','reigate','godstone','walton']
+  };
+
+  const perfect = ()=>({total:4,l1:1,hd:1});
+
+  function load(){
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || ''); } catch { return null; }
+  }
+  function save(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(stations)); }
+
+  function clampInt(v){ return Math.max(0, parseInt(String(v||'0'),10) || 0); }
+  function getShift(){ return $('shift').value; }
+
+  function setShiftLabel(){
+    $('shiftLabel').textContent = getShift()==='day' ? 'Day (07:00–19:00)' : 'Night (19:00–07:00)';
+  }
+
+  function eligibilityAllows(rec, shift){
+    if(rec.eligibility==='none') return false;
+    if(rec.eligibility==='dayOnly' && shift==='night') return false;
+    return true;
+  }
+
+  function validationWarnings(rec, shift){
+    const x = rec[shift];
+    const warns = [];
+    if(x.l1 > x.total) warns.push('L1 > Total');
+    if(x.hd > x.total) warns.push('HD > Total');
+    // overlap implied (not an error, just a hint)
+    const overlapMin = Math.max(0, (x.l1 + x.hd) - x.total);
+    if(overlapMin > 0) warns.push(`Overlap implied ≥ ${overlapMin}`);
+    return warns;
+  }
+
+  function statusFor(rec, shift){
+    const x = rec[shift];
+    const problems = [];
+    if(x.total < MIN_TOTAL) problems.push('Total < 4');
+    if(x.l1 < MIN_L1) problems.push('No Level 1');
+    if(x.hd < MIN_HD) problems.push('No Driver');
+    // hard validation (impossible inputs)
+    if(x.l1 > x.total) problems.push('Invalid: L1 > Total');
+    if(x.hd > x.total) problems.push('Invalid: HD > Total');
+    return { ok: problems.length===0, problems };
+  }
+
+  function protectionRank(rec){
+    if(rec.cap==='control') return 3;
+    if(rec.cap==='tl') return 2;
+    return 1;
+  }
+
+  // Initialise stations
+  let stations = load();
+  if(!stations || Object.keys(stations).length===0){
+    stations = {};
+    for(const s of SURREY){
+      stations[s.name.toLowerCase()] = { name:s.name, eligibility:s.eligibility, cap:s.cap, day:perfect(), night:perfect() };
+    }
+    save();
+  }
+
+  function render(){
+    setShiftLabel();
+    const shift = getShift();
+
+    const tbody = $('tbl').querySelector('tbody');
+    tbody.innerHTML = '';
+
+    const list = Object.values(stations).sort((a,b)=>a.name.localeCompare(b.name));
+    for(const rec of list){
+      const x = rec[shift];
+      const s = statusFor(rec, shift);
+      const warns = validationWarnings(rec, shift);
+
+      const warnHtml = warns.length ? `<div class="tiny warn">${warns.join(' • ')}</div>` : '';
+      const st = s.ok
+        ? `<span class="status good">ON THE RUN</span>${warnHtml}`
+        : `<span class="status bad">AT RISK</span><div class="tiny">${s.problems.join(', ')}</div>${warnHtml}`;
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><b>${rec.name}</b></td>
+        <td>
+          <select data-k="${rec.name.toLowerCase()}" data-f="eligibility">
+            <option value="24x7" ${rec.eligibility==='24x7'?'selected':''}>24/7</option>
+            <option value="dayOnly" ${rec.eligibility==='dayOnly'?'selected':''}>Day only</option>
+            <option value="none" ${rec.eligibility==='none'?'selected':''}>None</option>
+          </select>
+        </td>
+        <td>
+          <select data-k="${rec.name.toLowerCase()}" data-f="cap">
+            <option value="none" ${rec.cap==='none'?'selected':''}>None</option>
+            <option value="control" ${rec.cap==='control'?'selected':''}>Control</option>
+            <option value="tl" ${rec.cap==='tl'?'selected':''}>TL</option>
+          </select>
+        </td>
+        <td><input type="number" min="0" step="1" value="${x.total}" data-k="${rec.name.toLowerCase()}" data-f="${shift}.total" /></td>
+        <td><input type="number" min="0" step="1" value="${x.l1}" data-k="${rec.name.toLowerCase()}" data-f="${shift}.l1" /></td>
+        <td><input type="number" min="0" step="1" value="${x.hd}" data-k="${rec.name.toLowerCase()}" data-f="${shift}.hd" /></td>
+        <td>${st}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    save();
+  }
+
+  // --- Moves engine with nearest-first donor selection ---
+  function computeMoves(){
+    const shift = getShift();
+    const all = Object.values(stations);
+    const operating = all.filter(r => eligibilityAllows(r, shift));
+
+    // Control coverage: must keep at least one control site OK
+    const controlSites = operating.filter(r => r.cap==='control');
+    const controlOkCount = controlSites.filter(r => statusFor(r, shift).ok).length;
+
+    // deficits
+    const deficits = [];
+    for(const r of operating){
+      const x = r[shift];
+      const needTotal = Math.max(0, MIN_TOTAL - x.total);
+      const needL1 = Math.max(0, MIN_L1 - x.l1);
+      const needHD = Math.max(0, MIN_HD - x.hd);
+      // ignore stations with invalid input until fixed
+      if(x.l1 > x.total || x.hd > x.total) continue;
+      if(needTotal || needL1 || needHD) deficits.push({station:r, needTotal, needL1, needHD});
+    }
+
+    // donors: stations with surplus total and role surplus
+    const donorMap = new Map();
+    for(const r of operating){
+      const x = r[shift];
+      if(x.l1 > x.total || x.hd > x.total) continue;
+
+      const surplusTotal = x.total - MIN_TOTAL;
+      if(surplusTotal<=0) continue;
+
+      donorMap.set(r.name.toLowerCase(), {
+        station:r,
+        surplusTotal,
+        surplusL1: x.l1 - MIN_L1,
+        surplusHD: x.hd - MIN_HD
+      });
+    }
+
+    const moves = [];
+
+    const canDonate = (d, role) => {
+      if(!d) return false;
+      if(role==='L1') return d.surplusTotal>0 && d.surplusL1>0;
+      if(role==='HD') return d.surplusTotal>0 && d.surplusHD>0;
+      return d.surplusTotal>0;
+    };
+
+    const wouldBreakCountyControl = (donorStation) => {
+      if(donorStation.cap!=='control') return false;
+      // conservative: don't donate from control sites unless there are 2+ OK
+      return controlOkCount < 2;
+    };
+
+    const applyMove = (d, recv, role) => {
+      d.surplusTotal -= 1;
+      if(role==='L1') d.surplusL1 -= 1;
+      if(role==='HD') d.surplusHD -= 1;
+
+      d.station[shift].total -= 1;
+      recv.station[shift].total += 1;
+      if(role==='L1'){ d.station[shift].l1 -= 1; recv.station[shift].l1 += 1; }
+      if(role==='HD'){ d.station[shift].hd -= 1; recv.station[shift].hd += 1; }
+
+      moves.push({from:d.station.name, to:recv.station.name, role});
+    };
+
+    function donorOrderFor(receiverName){
+      const key = receiverName.toLowerCase();
+      const list = (NEAREST[key] || []).slice();
+      // fallback: if not in nearest table, just use all donors alphabetically
+      if(list.length===0){
+        return [...donorMap.keys()].sort();
+      }
+      return list.map(x=>x.toLowerCase());
+    }
+
+    function pickNearestDonor(receiverName, role, allowProtected=false){
+      const order = donorOrderFor(receiverName);
+      for(const donorKey of order){
+        const d = donorMap.get(donorKey);
+        if(!canDonate(d, role)) continue;
+        if(wouldBreakCountyControl(d.station)) continue;
+        if(!allowProtected && (d.station.cap==='tl' || d.station.cap==='control')) continue;
+        return d;
+      }
+      // last resort: allow protected (still protecting last control via rule above)
+      for(const donorKey of order){
+        const d = donorMap.get(donorKey);
+        if(!canDonate(d, role)) continue;
+        if(wouldBreakCountyControl(d.station)) continue;
+        return d;
+      }
+      return null;
+    }
+
+    // Fill deficits in priority order: L1 -> HD -> Total
+    for(const def of deficits){
+      while(def.needL1>0){
+        let d = pickNearestDonor(def.station.name,'L1',false);
+        if(!d) d = pickNearestDonor(def.station.name,'L1',true);
+        if(!d) break;
+        applyMove(d, def, 'L1');
+        def.needL1--;
+      }
+    }
+
+    for(const def of deficits){
+      while(def.needHD>0){
+        let d = pickNearestDonor(def.station.name,'HD',false);
+        if(!d) d = pickNearestDonor(def.station.name,'HD',true);
+        if(!d) break;
+        applyMove(d, def, 'HD');
+        def.needHD--;
+      }
+    }
+
+    for(const def of deficits){
+      while(def.needTotal>0){
+        let d = pickNearestDonor(def.station.name,'FF',false);
+        if(!d) d = pickNearestDonor(def.station.name,'FF',true);
+        if(!d) break;
+        applyMove(d, def, 'FF');
+        def.needTotal--;
+      }
+    }
+
+    const atRisk = operating
+      .map(r=>({name:r.name, status:statusFor(r,shift), cap:r.cap}))
+      .filter(x=>!x.status.ok);
+
+    const controlAfterOk = operating.filter(r=>r.cap==='control' && statusFor(r,shift).ok).length;
+
+    return {shift, moves, atRisk, controlSites: controlSites.map(x=>x.name), controlAfterOk};
+  }
+
+  function renderMoves(res){
+    const shiftTxt = res.shift==='day' ? 'Day (07:00–19:00)' : 'Night (19:00–07:00)';
+    $('summary').innerHTML = `
+      <div><b>Shift:</b> ${shiftTxt}</div>
+      <div><b>Moves suggested:</b> ${res.moves.length}</div>
+      <div><b>Control sites:</b> ${res.controlSites.join(', ') || '—'} • <b>OK after:</b> ${res.controlAfterOk}</div>
+      <div><b>Stations still at risk:</b> <span class="${res.atRisk.length?'bad':'good'}">${res.atRisk.length}</span></div>
+    `;
+
+    const movesEl = $('moves');
+    movesEl.innerHTML = '';
+
+    if(res.moves.length===0 && res.atRisk.length===0){
+      movesEl.innerHTML = `<div class="move"><div class="top"><b class="good">All stations in scope are ON THE RUN.</b><span class="tag">No moves needed</span></div></div>`;
+      return;
+    }
+
+    for(const m of res.moves){
+      const roleTxt = m.role==='L1' ? 'Level 1 Officer' : m.role==='HD' ? 'Driver (HD)' : 'Firefighter';
+      const div = document.createElement('div');
+      div.className = 'move';
+      div.innerHTML = `<div class="top"><b>${m.from} → ${m.to}</b><span class="tag">${roleTxt}</span></div>`;
+      movesEl.appendChild(div);
+    }
+
+    if(res.atRisk.length){
+      const div = document.createElement('div');
+      div.className = 'move';
+      div.innerHTML = `<div class="top"><b class="bad">Still AT RISK</b><span class="tag">Needs escalation</span></div>
+        <div class="tiny" style="margin-top:6px">${res.atRisk.map(x=>`<b>${x.name}</b>: ${x.status.problems.join(', ')}`).join('<br>')}</div>`;
+      movesEl.appendChild(div);
+    }
+
+    render();
+  }
+
+  // Inline editing
+  $('tbl').addEventListener('input', (e)=>{
+    const t = e.target;
+    if(!t.dataset || !t.dataset.k || !t.dataset.f) return;
+
+    const key = t.dataset.k;
+    const field = t.dataset.f;
+    const rec = stations[key];
+    if(!rec) return;
+
+    if(field==='eligibility') rec.eligibility = t.value;
+    else if(field==='cap') rec.cap = t.value;
+    else {
+      const [sh, f] = field.split('.');
+      rec[sh][f] = clampInt(t.value);
+    }
+
+    save();
+    render();
+  });
+
+  $('shift').addEventListener('change', ()=>{ render(); $('moves').innerHTML=''; $('summary').innerHTML=''; });
+
+  // Make Calculate reliably fire (and show errors instead of silently failing)
+  $('calc').addEventListener('click', (ev)=>{
+    ev.preventDefault();
+    try{
+      const res = computeMoves();
+      renderMoves(res);
+    } catch(err){
+      console.error(err);
+      $('summary').innerHTML = `<div class="bad"><b>Error:</b> ${String(err && err.message ? err.message : err)}</div>`;
+    }
+  });
+
+  $('reset').addEventListener('click', ()=>{
+    if(confirm('Reset all stations to perfect crewing (both shifts)?')){
+      for(const k of Object.keys(stations)){
+        stations[k].day = perfect();
+        stations[k].night = perfect();
+      }
+      save();
+      render();
+      $('moves').innerHTML=''; $('summary').innerHTML='';
+    }
+  });
+
+  $('clear').addEventListener('click', ()=>{
+    if(confirm('Clear saved data and reload defaults?')){
+      localStorage.removeItem(STORAGE_KEY);
+      location.reload();
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
