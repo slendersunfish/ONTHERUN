@@ -1,4 +1,4 @@
- <!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -36,6 +36,31 @@
     .move .tag{font-size:12px;border:1px solid var(--line);padding:4px 8px;border-radius:999px;color:var(--muted)}
     .hr{height:1px;background:var(--line);margin:10px 0}
     code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+  
+    /* Modal */
+    #modal{position:fixed;inset:0;z-index:9999}
+    .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.65)}
+    .modal-card{position:relative;max-width:860px;margin:6vh auto 0;background:rgba(18,24,36,.98);border:1px solid var(--line);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.55);overflow:hidden}
+    .modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:14px 14px 10px;border-bottom:1px solid var(--line)}
+    .modal-title{font-size:18px;font-weight:900;letter-spacing:.2px}
+    .modal-sub{font-size:12px;color:var(--muted);margin-top:2px}
+    .modal-body{padding:14px}
+    .modal-foot{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-top:1px solid var(--line);flex-wrap:wrap}
+    .iconbtn{background:#0b1220;border:1px solid var(--line);color:var(--text);width:36px;height:36px;border-radius:10px;cursor:pointer}
+    .iconbtn:hover{filter:brightness(1.1)}
+
+    /* Print */
+    @media print{
+      body{background:#fff;color:#000}
+      header,.row,select,input,.btn,.pill,.hr,#tbl{display:none !important}
+      .card{box-shadow:none;border:none}
+      #modal{position:static;display:block !important}
+      .modal-backdrop{display:none !important}
+      .modal-card{margin:0;max-width:none;border:none;box-shadow:none;border-radius:0}
+      .modal-head{border:none}
+      .modal-title{font-size:20px}
+      .modal-foot{display:none !important}
+    }
   </style>
 </head>
 <body>
@@ -89,6 +114,30 @@
       <div class="hr"></div>
       <div id="summary" class="tiny"></div>
       <div id="moves" class="moves"></div>
+
+      <!-- Bold results pop-up (modal) -->
+      <div id="modal" aria-hidden="true" style="display:none;">
+        <div class="modal-backdrop" data-modal-close></div>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+          <div class="modal-head">
+            <div>
+              <div class="modal-title" id="modalTitle">Standby Moves</div>
+              <div class="modal-sub" id="modalSub">Review and print / share</div>
+            </div>
+            <button class="iconbtn" title="Close" data-modal-close>✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="modalBody"></div>
+          </div>
+          <div class="modal-foot">
+            <div class="pill">Tip: <span style="color:#cbd5e1">Use Print to send to station printer</span></div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+              <button class="btn" data-modal-close>Close</button>
+              <button class="btn primary" id="printBtn">Print / Send to station printer</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div class="hr"></div>
       <div class="tiny">
@@ -395,29 +444,52 @@
       <div><b>Stations still at risk:</b> <span class="${res.atRisk.length?'bad':'good'}">${res.atRisk.length}</span></div>
     `;
 
+    // On-page list
     const movesEl = $('moves');
     movesEl.innerHTML = '';
 
+    // Modal content (bold, clear)
+    const lines = [];
+    lines.push(`<div class="move"><div class="top"><b>Shift:</b> ${shiftTxt}<span class="tag">Generated</span></div></div>`);
+
     if(res.moves.length===0 && res.atRisk.length===0){
+      lines.push(`<div class="move"><div class="top"><b class="good">All stations in scope are ON THE RUN.</b><span class="tag">No moves needed</span></div></div>`);
       movesEl.innerHTML = `<div class="move"><div class="top"><b class="good">All stations in scope are ON THE RUN.</b><span class="tag">No moves needed</span></div></div>`;
-      return;
+    } else {
+      // Build modal list
+      lines.push(`<div class="move"><div class="top"><b>Standby Moves</b><span class="tag">Action</span></div>
+        <div class="tiny" style="margin-top:8px">` +
+        res.moves.map((m,i)=>{
+          const roleTxt = m.role==='L1' ? 'Level 1 Officer' : m.role==='HD' ? 'Driver (HD)' : 'Firefighter';
+          return `<div style="margin:8px 0"><b>${i+1}. ${m.from} → ${m.to}</b> <span class="tag">${roleTxt}</span></div>`;
+        }).join('') +
+        `</div></div>`);
+
+      // Build on-page list
+      for(const m of res.moves){
+        const roleTxt = m.role==='L1' ? 'Level 1 Officer' : m.role==='HD' ? 'Driver (HD)' : 'Firefighter';
+        const div = document.createElement('div');
+        div.className = 'move';
+        div.innerHTML = `<div class="top"><b>${m.from} → ${m.to}</b><span class="tag">${roleTxt}</span></div>`;
+        movesEl.appendChild(div);
+      }
+
+      if(res.atRisk.length){
+        lines.push(`<div class="move"><div class="top"><b class="bad">Still AT RISK</b><span class="tag">Escalate</span></div>
+          <div class="tiny" style="margin-top:8px">${res.atRisk.map(x=>`<div style="margin:8px 0"><b>${x.name}</b>: ${x.status.problems.join(', ')}</div>`).join('')}</div></div>`);
+
+        const div = document.createElement('div');
+        div.className = 'move';
+        div.innerHTML = `<div class="top"><b class="bad">Still AT RISK</b><span class="tag">Needs escalation</span></div>
+          <div class="tiny" style="margin-top:6px">${res.atRisk.map(x=>`<b>${x.name}</b>: ${x.status.problems.join(', ')}`).join('<br>')}</div>`;
+        movesEl.appendChild(div);
+      }
     }
 
-    for(const m of res.moves){
-      const roleTxt = m.role==='L1' ? 'Level 1 Officer' : m.role==='HD' ? 'Driver (HD)' : 'Firefighter';
-      const div = document.createElement('div');
-      div.className = 'move';
-      div.innerHTML = `<div class="top"><b>${m.from} → ${m.to}</b><span class="tag">${roleTxt}</span></div>`;
-      movesEl.appendChild(div);
-    }
-
-    if(res.atRisk.length){
-      const div = document.createElement('div');
-      div.className = 'move';
-      div.innerHTML = `<div class="top"><b class="bad">Still AT RISK</b><span class="tag">Needs escalation</span></div>
-        <div class="tiny" style="margin-top:6px">${res.atRisk.map(x=>`<b>${x.name}</b>: ${x.status.problems.join(', ')}`).join('<br>')}</div>`;
-      movesEl.appendChild(div);
-    }
+    // Always pop-up results
+    $('modalBody').innerHTML = lines.join('');
+    $('modalSub').textContent = res.moves.length ? 'Would you like these moves sent to the station printer?' : 'No moves required — you can still print the confirmation.';
+    showModal();
 
     render();
   }
@@ -475,6 +547,29 @@
       location.reload();
     }
   });
+
+  function showModal(){
+    const m = $('modal');
+    m.style.display = 'block';
+    m.setAttribute('aria-hidden','false');
+  }
+
+  function hideModal(){
+    const m = $('modal');
+    m.style.display = 'none';
+    m.setAttribute('aria-hidden','true');
+  }
+
+  // Close modal handlers
+  document.addEventListener('click', (e)=>{
+    const t = e.target;
+    if(t && t.dataset && Object.prototype.hasOwnProperty.call(t.dataset,'modalClose')) hideModal();
+  });
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') hideModal(); });
+
+  // Print button (opens browser print dialog; user chooses station printer)
+  const pb = $('printBtn');
+  if(pb){ pb.addEventListener('click', ()=>window.print()); }
 
   render();
 })();
